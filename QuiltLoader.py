@@ -13,6 +13,15 @@ except AttributeError:
     pass
 
 def _normalize_im(img):
+    """
+    Parameters
+    ----------
+    img: np.ndarray
+        The ndarray that should have all values normalized
+    Output
+    ----------
+    This is a normalize image function, the output of this normalization is in standard 0 - 255 value range.
+    """
     im_min = np.min(img)
     im_max = np.max(img)
 
@@ -26,15 +35,35 @@ def _normalize_im(img):
 
     return img
 
-# channels to rgb function
-# takes three xy images and find the normal inverse of them all and returns them in a stack
-def _channels_to_rgb(c1, c2, c3):
-    r = _normalize_im(c1)
-    g = _normalize_im(c2)
-    b = _normalize_im(c3)
+def _channels_to_rgb(r, g, b):
+    """
+    Parameters
+    ----------
+    r, g, b: np.ndarray
+        ndarray containing which data should be shown as each r, g, b channels of the output image.
+    Output
+    ----------
+    Normalizes all color channels using _normalize_im, then stacks them and ensures integer for future computation.
+    """
+
+    r = _normalize_im(r)
+    g = _normalize_im(g)
+    b = _normalize_im(b)
     return np.stack((r,g,b), -1).astype(int)
 
-def CUSTOM_TRY_EXCEPT(node, key):
+def _custom_try_except(node, key):
+    """
+    Parameters
+    ----------
+    node: quilt.nodes.Node
+        The current self node.
+    key: str
+        The target child node.
+    Output
+    ----------
+    Attempts to open the target by try -> except blocks with default loaders. If all loaders fail, it getattrs the target from current as a safety.
+    """
+
     # this is disgusting and im sorry
     try:
         return json.load(open(getattr(node, key)()))
@@ -46,43 +75,154 @@ def CUSTOM_TRY_EXCEPT(node, key):
     except:
         pass
 
-    # setattr(self[key], '_parent_node_', self)
     return getattr(node, key)()
+
+def _join_dicts(additions, defaults):
+    """
+    Parameters
+    ----------
+    additions: dict
+        A dictionary of custom dictionary additions.
+    defaults: dict
+        Default set of items all custom dictionaries of this type must have.
+    Output
+    ----------
+    Uses the defaults object to determine if any default items are missing from the additions provided and applies the default items to those that are.
+    """
+
+    # ensure loaders exist for each type of obj
+    for required, item in defaults.items():
+        if required not in additions.keys():
+            additions[required] = item
+
+    # return completed loader dict
+    return additions
+
+def _find_nodes(head, label, nodes):
+    # find and return a list of found quilt nodes
+    found = list()
+    for node in nodes:
+        found.append(head[label][node])
+
+    return found
+
+def _get_associates(self):
+    # TODO:
+    # add load functionality?
+
+    meta = self['info']
+    associates = dict()
+    known_associates = ['plates', 'wells', 'lines', 'fovs', 'cell_segs', 'nuclei_segs', 'structure_segs']
+
+    for known in known_associates:
+        try:
+            associates[known] = _find_nodes(self.pkg_head,
+                                            known,
+                                            meta[known])
+        except KeyError:
+            pass
+
+    return associates
 
 STANDARD_LOADERS = {'image': tfle.TiffFile,
                     'info': json.load,
-                    'load': CUSTOM_TRY_EXCEPT}
+                    'load': _custom_try_except}
+
+STANDARD_ATTRIBUTES = {'get_associates': _get_associates}
 
 class QuiltLoader:
-    def __new__(self, package, load_functions=STANDARD_LOADERS):
+    """
+    Parameters
+    ----------
+    package: str/ quilt.nodes.PackageNode
+        The desired package to initialize with the QuiltLoader functionality.
+    load_functions: dict
+        The specified loading behavior of DataNodes.
+        Default: STANDARD_LOADERS
+    attributes: dict
+        Additional attributes
+    Output
+    ----------
+    Changes __len__ and __getitem__ functions for all quilt.nodes.Node classes to be the QuiltLoader defined functions of get_len and get_node.
+    Adds any navigation functions given by the user
+    """
+
+    # TODO:
+    # any changes made by the QuiltLoader initialization should be instanced to the loaded packages objects, i believe the current implementation changes Quilt nodes to be whichever the most recent QuiltLoader initializations parameters
+    #
+    # i should be able to load multiple datasets with different QuiltLoader specifications that are unique from each other
+
+    def __new__(self,
+                package,
+                load_functions=STANDARD_LOADERS,
+                attributes=STANDARD_ATTRIBUTES):
+
+        # set all nodes to have a pointer to the head
+        pkg = self.ensure_package(self, package)
+        setattr(quilt.nodes.Node, 'pkg_head', pkg)
+
         # set all nodes to have new functions
         quilt.nodes.Node.__len__ = self.get_len
         quilt.nodes.Node.__getitem__ = self.get_node
 
-        load_functions = self.compare_load_functions(load_functions)
-
+        # add provided load functions as an attribute
+        load_functions = self.add_load_functions(load_functions)
         setattr(quilt.nodes.Node, 'load_functions', load_functions)
 
+        # add all additional attributes
+        attributes = self.add_attributes(attributes)
+        for label, attr in attributes.items():
+            setattr(quilt.nodes.Node, label, attr)
+
         # return the loaded object
-        return self.ensure_package(self, package)
+        return pkg
 
-    def compare_load_functions(loaders):
-        default_loaders = ['image', 'info', 'load']
+    def add_load_functions(loaders):
+        """
+        Parameters
+        ----------
+        loaders: dict
+            A dictionary of custom loading functions with.
+            Ex: {'image': custom_img_loader, 'info': custom_json_loader}
+        Output
+        ----------
+        Uses the join_dicts function to add any default loaders that were not provided in the custom loaders object.
+        """
 
-        for required in default_loaders:
-            if required not in loaders.keys():
-                loaders[required] = STANDARD_LOADERS[required]
+        return _join_dicts(loaders, STANDARD_LOADERS)
 
-        return loaders
+    def add_attributes(attributes):
+        """
+        Parameters
+        ----------
+        attributes: dict
+            A dictionary of custom attributes to add to Quilt nodes.
+            Ex: {'get_associates': custom_associate_loader}
+        Output
+        ----------
+        Uses the join_dicts function to add any default attributes that were not provided in the custom attributes object.
+        """
 
-    # load package by either preload or 'org/pkg'
+        return _join_dicts(attributes, STANDARD_ATTRIBUTES)
+
     def ensure_package(self, package):
+        """
+        Parameters
+        ----------
+        package: string/ quilt.nodes.PackageNode
+            String representing which package to load or the preloaded Package.
+        Output
+        ----------
+        Attempts to find the package specified by breaking down the org/pkg structure if it exists. If it doesn't, org defaults to 'aics'. Returns the found or provided PackageNode.
+        """
+
         # given preload, simple return
         if isinstance(package, quilt.nodes.PackageNode):
             return package
 
         # given string, decouple org/ pkg, or use default 'aics'
         if isinstance(package, str):
+            # check org/pkg split
             if '/' in package:
                 package = package.split('/')
                 org = package[0]
@@ -90,8 +230,10 @@ class QuiltLoader:
             else:
                 org = 'aics'
 
+            # attempt to find package
             try:
-                return importlib.import_module(name='quilt.data.' + org + '.' + package)
+                return importlib.import_module(name='quilt.data.' +
+                                                org + '.' + package)
             except ModuleNotFoundError:
                 print(org + '/' + pkg + ' has not been installed.')
                 raise ModuleNotFoundError
@@ -100,8 +242,13 @@ class QuiltLoader:
         print('Must provide either preloaded Quilt package or standard "org/pkg" string.')
         raise ModuleNotFoundError
 
-    # len of group node
     def get_len(self):
+        """
+        Output
+        ----------
+        Returns length of a node by getting all object keys and removing any keys ment to be private, specified by an '_' character at the beginning of the key.
+        """
+
         # get all node keys
         keys = list(self.__dict__.keys())
         # remove any keys that begin with '_'
@@ -111,8 +258,33 @@ class QuiltLoader:
 
         return len(keys)
 
-    # basic iterables
     def get_node(self, key):
+        """
+        Parameters
+        ----------
+        key: str/ int/ slice
+            Key determining which child node should be returned by the current object.
+        Output
+        ----------
+        Provided integer: creates a list of all public keys and returns the object at key + 1 of created list.
+
+        Provided slice: sets start, stop, and step, to 1 if None provided, returns the generated list from expanding the slice function.
+
+        Provided string: attempts to getattr the key from the current object.
+
+        Additionally each of these gets attempts to use the custom load_functions to actually open the nodes.
+
+        If key is not a string, int, or slice, raises TypeError as unsupported.
+        """
+        # TODO:
+        # attempt to fix the key + 1, start, stop = 1 issues
+        #
+        # add dev_mode that returns two objects
+        # current
+        # fov = fov['image']
+        # dev_mode
+        # fov, filepath = fov['image']
+
         # iter by int
         if isinstance(key, int):
             # get all node keys
@@ -128,7 +300,6 @@ class QuiltLoader:
             try:
                 return self.load_functions['load'](attempt, 'load')
             except AttributeError:
-                # setattr(self[key + 1], '_parent_node_', self)
                 return getattr(self, keys[key + 1])
 
         # iter by slice
@@ -146,14 +317,14 @@ class QuiltLoader:
         if isinstance(key, str):
             # detect node type and load proper
             if key == 'image':
-                return self.load_functions['image'](getattr(getattr(self, key), 'load')())
+                return self.load_functions['image'](getattr(
+                                        getattr(self, key), 'load')())
             if key == 'info':
-                return self.load_functions['info'](open(getattr(getattr(self, key), 'load')()))
+                return self.load_functions['info'](open(
+                                        getattr(getattr(self, key), 'load')()))
             if key == 'load':
                 return self.load_functions['load'](self, key)
 
-            # no specific node type requested, must be a group node
-            # setattr(self[key], '_parent_node_', self)
             return getattr(self, key)
 
         # return unsupported type
@@ -249,7 +420,6 @@ class QuiltLoader:
         if not isinstance(img, np.ndarray):
             print('display_rgb(img) requires img to be either type TiffFile or ndarray.')
             raise TypeError
-
 
         # initialize use all variables
         if use == 'all':
