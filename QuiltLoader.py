@@ -3,6 +3,7 @@ import numpy as np
 import importlib
 import codecs
 import quilt
+import types
 import json
 
 import matplotlib.pyplot as plt
@@ -49,7 +50,7 @@ def _channels_to_rgb(r, g, b):
     r = _normalize_im(r)
     g = _normalize_im(g)
     b = _normalize_im(b)
-    return np.stack((r,g,b), -1).astype(int)
+    return np.stack((r,g,b), -1).astype(np.uint8)
 
 def _custom_try_except(node, key):
     """
@@ -322,9 +323,9 @@ class QuiltLoader:
             if key == 'info':
                 return self.load_functions['info'](open(
                                         getattr(getattr(self, key), 'load')()))
-            if key == 'load':
-                return self.load_functions['load'](self, key)
-
+            # try:
+            #     return self.load_functions['load'](self, 'load')
+            # except AttributeError:
             return getattr(self, key)
 
         # return unsupported type
@@ -368,6 +369,9 @@ class QuiltLoader:
         if dims not in [4, 5]:
             print('image data is not in a standard aics image format.')
             raise TypeError
+
+        if img.shape[1] != 7:
+            use_channels = [0, 1, 2, 3]
 
         # for each channel plot max of stack
         for i, ax in enumerate(axes):
@@ -431,10 +435,13 @@ class QuiltLoader:
 
         dims = len(img.shape)
         if dims == 5:
-            img = np.max(img, 0)
+            img = img[0,:,:,:,:]
         if dims not in [4, 5]:
             print('image data is not in a standard aics image format.')
             raise TypeError
+
+        if img.shape[1] != 7:
+            rgb_indices = [0, 1, 2]
 
         # get the rgb channel data using the specified numpy function
         if use == 'max' or use == 'all':
@@ -525,10 +532,13 @@ class QuiltLoader:
         size = img.shape
         dims = len(size)
         if dims == 5:
-            img = np.max(img, 0)
+            img = img[0,:,:,:,:]
         if dims not in [4, 5]:
             print('image data is not in a standard aics image format.')
             raise TypeError
+
+        if img.shape[1] != 7:
+            use_indices = [0, 1, 2]
 
         # initialize empty numpy stack
         real_values = np.zeros((size[2], size[3]))
@@ -584,10 +594,10 @@ class QuiltLoader:
         if converted:
             return img
 
-    def display_icell(imgs=[], use='max', force_return=False):
+    def display_icell(imgs=[], use='max', percentile=75.0, force_return=False):
         # specified np function doesn't exist or is not supported
-        if use not in ['max', 'mean', 'all']:
-            print('display_icell parameter "use" must be "max" (default), "mean"s, or "all".')
+        if use not in ['max', 'mean', 'percentile', 'all']:
+            print('display_icell parameter "use" must be "max" (default), "mean", "percentile", or "all".')
             raise ValueError
 
         converted = False
@@ -615,12 +625,15 @@ class QuiltLoader:
             if use == 'mean':
                 imgs[i] = _normalize_im(np.mean(img, 0))
                 real_values += imgs[i]
+            if use == 'percentile':
+                imgs[i] = _normalize_im(np.percentile(img, percentile, 0))
+                real_values += imgs[i]
 
         if force_return:
             return _normalize_im(real_values)
 
         if use == 'all':
-            styles = ['max', 'mean']
+            styles = ['max', 'mean', 'percentile']
             fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
             axes = axes.flatten()
 
@@ -628,6 +641,7 @@ class QuiltLoader:
             for i, style in enumerate(styles):
                 img_collection.append(QuiltLoader.display_icell(imgs,
                                         use=styles[i],
+                                        percentile=percentile,
                                         force_return=True))
 
             # for each varient plot rgb
@@ -647,3 +661,6 @@ class QuiltLoader:
         # return the ndarray of the img if it was converted
         if converted:
             return img
+
+    def display_all(node):
+        return
