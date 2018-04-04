@@ -125,11 +125,28 @@ def _get_associates(self):
 
     return associates
 
+def _get_items(self):
+    # get all node keys
+    keys = list(self.__dict__.keys())
+    # remove any keys that begin with '_'
+    for remove_key in keys:
+        if '_' == remove_key[0]:
+            keys.remove(remove_key)
+    
+    keys.remove('_node')
+                
+    items = dict()
+    for key in keys:
+        items[key] = self.__dict__[key]
+        
+    return items.items()
+
 STANDARD_LOADERS = {'image': tfle.TiffFile,
                     'info': json.load,
                     'load': _custom_try_except}
 
-STANDARD_ATTRIBUTES = {'get_associates': _get_associates}
+STANDARD_ATTRIBUTES = {'get_associates': _get_associates,
+                       'items': _get_items}
 
 class QuiltLoader:
     """
@@ -256,6 +273,8 @@ class QuiltLoader:
         for remove_key in keys:
             if '_' == remove_key[0]:
                 keys.remove(remove_key)
+                
+        keys.remove('_node')
 
         return len(keys)
 
@@ -267,7 +286,7 @@ class QuiltLoader:
             Key determining which child node should be returned by the current object.
         Output
         ----------
-        Provided integer: creates a list of all public keys and returns the object at key + 1 of created list.
+        Provided integer: creates a list of all public keys and returns the object at key of created list.
 
         Provided slice: sets start, stop, and step, to 1 if None provided, returns the generated list from expanding the slice function.
 
@@ -294,25 +313,27 @@ class QuiltLoader:
             for remove_key in keys:
                 if '_' == remove_key[0]:
                     keys.remove(remove_key)
+            
+            keys.remove('_node')
 
             # return the specified iterable
             # key + 1 due to nodes having a self key
-            attempt = getattr(self, keys[key + 1])
+            attempt = getattr(self, keys[key])
             try:
                 return self.load_functions['load'](attempt, 'load')
             except AttributeError:
-                return getattr(self, keys[key + 1])
+                return getattr(self, keys[key])
 
         # iter by slice
         if isinstance(key, slice):
             # simple fix for slice
             # start and stop + 1 due to nodes having self key
-            start = 1 if key.start is None else key.start
+            start = 0 if key.start is None else key.start
             stop = 1 if key.stop is None else key.stop
             step = 1 if key.step is None else key.step
 
             # return the specified items
-            return [self[i] for i in range(start, stop + 1, step)]
+            return [self[i] for i in range(start, stop, step)]
 
         # iter by str
         if isinstance(key, str):
@@ -626,7 +647,7 @@ class QuiltLoader:
                 imgs[i] = _normalize_im(np.mean(img, 0))
                 real_values += imgs[i]
             if use == 'percentile':
-                imgs[i] = _normalize_im(np.percentile(img, percentile, 0))
+                imgs[i] = _normalize_im(np.percentile(img, percentile, 0).astype(np.uint8))
                 real_values += imgs[i]
 
         if force_return:
@@ -662,5 +683,5 @@ class QuiltLoader:
         if converted:
             return img
 
-    def display_all(node):
+    def display_all(node, use='max', percentile=75.0):
         return
