@@ -6,5 +6,5 @@ setup(name='QuiltLoader',
       author='Jackson Maxfield Brown',
       author_email='jacksonb@alleninstitute.org',
       url='https://github.com/AllenCellModeling/QuiltLoader',
-      packages=['quilt','matplotlib', 'numpy', 'tifffile'],
+      packages=['QuiltLoader'],
       install_requires=['quilt','matplotlib', 'numpy', 'tifffile'])
