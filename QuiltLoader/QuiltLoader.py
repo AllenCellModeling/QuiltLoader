@@ -1,4 +1,5 @@
 import tifffile as tfle
+import pandas as pd
 import numpy as np
 import importlib
 import codecs
@@ -103,14 +104,14 @@ def _find_nodes(head, label, nodes):
     # find and return a list of found quilt nodes
     found = list()
     for node in nodes:
-        found.append(head[label][node])
+        try:
+            found.append(head[label][node])
+        except AttributeError:
+            pass
 
     return found
 
 def _get_associates(self):
-    # TODO:
-    # add load functionality?
-
     meta = self['info']
     associates = dict()
     known_associates = ['plates', 'wells', 'lines', 'fovs', 'cell_segs', 'nuclei_segs', 'structure_segs']
@@ -132,21 +133,377 @@ def _get_items(self):
     for remove_key in keys:
         if '_' == remove_key[0]:
             keys.remove(remove_key)
-    
+
     keys.remove('_node')
-                
+
     items = dict()
     for key in keys:
         items[key] = self.__dict__[key]
-        
+
     return items.items()
+
+def _get_dataframe(self):
+    if not isinstance(self, quilt.nodes.GroupNode):
+        raise TypeError('"get_dataframe" is required to be called on a base level GroupNode')
+
+    if 'info' in self.__dict__:
+        raise TypeError('"get_dataframe" is required to be called on a base level GroupNode')
+
+    objs = list()
+    for node_name, node_objects in self.items():
+        to_add = dict(node_objects['info'])
+
+        to_add['node'] = node_name
+        remove_keys = ['edits', 'channels', 'plates', 'lines', 'wells', 'fovs', 'cell_segs', 'nuclei_segs', 'structure_segs']
+        for key in remove_keys:
+            try:
+                del to_add[key]
+            except KeyError:
+                pass
+
+        for key, item in to_add.items():
+            if isinstance(item, list):
+                to_add[key] = str(item)
+            # elif isinstance(item, dict):
+            #     to_add[key] = json.dumps(item)
+
+        objs.append(to_add)
+
+    return pd.DataFrame(objs)
+
+def check_node_for_image(self, img):
+    if not isinstance(self, quilt.nodes.GroupNode):
+        raise TypeError('"display_segs" requires a node with at least one of each associated "cell_segs", "nuclei_segs", and "structure_segs" as the "node" parameter')
+
+    if '_mem_img' in self.__dict__:
+        img = self._mem_img
+    elif img is None:
+        associates = self.get_associates()
+        if 'fovs' not in associates:
+            img = self['image']
+        else:
+            img = associates['fovs'][0]['image']
+    # check if TiffFile and convert if necessary
+    if isinstance(img, tfle.tifffile.TiffFile):
+        img = img.asarray()
+
+    setattr(self, '_mem_img', img)
+
+    # if the image object is not in ndarray form now, it was not a valid arg
+    if not isinstance(img, np.ndarray):
+        print('display_channels(img) requires img to be either type TiffFile or ndarray.')
+        raise TypeError
+
+    return img
+
+def display_channels(self, img=None, use_channels=[1, 3, 5, 6]):
+    """
+    Parameters
+    ----------
+    img: TiffFile/ ndarray
+        Either TiffFile or ndarray to display.
+        Standard AICS image: [t, z, channel, y, x]
+    use_channels: list
+        List containing the indices of which channels to use for display.
+        Default: [1, 3, 5, 6]
+    Output
+    ----------
+    If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the max of the z-stack.
+    """
+
+    img = check_node_for_image(self, img)
+
+    # initialize plots
+    fig, axes = plt.subplots(1, len(use_channels), figsize=(15, 10))
+    axes = axes.flatten()
+
+    dims = len(img.shape)
+    if dims == 5:
+        img = np.max(img, 0)
+    if dims not in [4, 5]:
+        print('image data is not in a standard aics image format.')
+        raise TypeError
+
+    if img.shape[1] != 7:
+        use_channels = [0, 1, 2, 3]
+
+    # for each channel plot max of stack
+    for i, ax in enumerate(axes):
+        z_stack = img[:,use_channels[i],:,:]
+        max_project = np.max(z_stack, 0)
+        ax.imshow(max_project)
+        ax.set(xticks=[], yticks=[])
+        ax.set_title('channel: ' + str(use_channels[i]))
+
+    # viewing nicety
+    plt.tight_layout()
+
+def display_rgb(self, img=None, rgb_indices=[1, 3, 5], use='max', percentile=75.0):
+    """
+    Parameters
+    ----------
+    img: TiffFile/ ndarray
+        Either TiffFile or ndarray to display.
+        Standard AICS image: [t, z, channel, y, x]
+    channel_to_rgb_indices: list
+        List containing the indices of which channels to use for display.
+        Default: [1, 3, 5]
+    use: string
+        String determing which numpy function to use for displaying image.
+        Default: 'max'
+    percentile: float
+        Float to be used if numpy function is specified to be 'percentile'.
+    Output
+    ----------
+    If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the numpy function of the z-stack as rgb channels.
+    """
+
+    img = check_node_for_image(self, img)
+
+    # if the image object is not in ndarray form now, it was not a valid arg
+    if not isinstance(img, np.ndarray):
+        print('display_rgb(img) requires img to be either type TiffFile or ndarray.')
+        raise TypeError
+
+    # initialize use all variables
+    if use == 'all':
+        styles = ['max', 'mean', 'percentile']
+        fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
+        axes = axes.flatten()
+
+        img_collection = list()
+
+    dims = len(img.shape)
+    if dims == 5:
+        img = img[0,:,:,:,:]
+    if dims not in [4, 5]:
+        print('image data is not in a standard aics image format.')
+        raise TypeError
+
+    if img.shape[1] != 7:
+        rgb_indices = [0, 1, 2]
+
+    # get the rgb channel data using the specified numpy function
+    if use == 'max' or use == 'all':
+        r = np.max(img[:, rgb_indices[0], :, :], 0)
+        g = np.max(img[:, rgb_indices[1], :, :], 0)
+        b = np.max(img[:, rgb_indices[2], :, :], 0)
+
+        if use == 'all':
+            img_collection.append([r, g, b])
+    if use == 'mean' or use == 'all':
+        r = np.mean(img[:, rgb_indices[0], :, :], 0)
+        g = np.mean(img[:, rgb_indices[1], :, :], 0)
+        b = np.mean(img[:, rgb_indices[2], :, :], 0)
+
+        if use == 'all':
+            img_collection.append([r, g, b])
+    if use =='percentile' or use == 'all':
+        r = np.percentile(img[:, rgb_indices[0], :, :], percentile, 0)
+        g = np.percentile(img[:, rgb_indices[1], :, :], percentile, 0)
+        b = np.percentile(img[:, rgb_indices[2], :, :], percentile, 0)
+
+        if use == 'all':
+            img_collection.append([r, g, b])
+
+    if use == 'all':
+        # for each varient plot rgb
+        for i, ax in enumerate(axes):
+            ax.set(xticks=[], yticks=[])
+            ax.set_title(styles[i] + ' project' +
+                        '\nr: ' + str(rgb_indices[0]) +
+                        ' g: ' + str(rgb_indices[1]) +
+                        ' b: ' + str(rgb_indices[2]))
+            ax.imshow(_channels_to_rgb(img_collection[i][0],
+                                        img_collection[i][1],
+                                        img_collection[i][2]))
+
+    else:
+        # plot the image
+        plt.axis('off')
+        plt.title('r: ' + str(rgb_indices[0]) +
+                    ' g: ' + str(rgb_indices[1]) +
+                    ' b: ' + str(rgb_indices[2]))
+        plt.imshow(_channels_to_rgb(r, g, b))
+
+def display_stack(self, img=None, use_indices=[1, 3, 5], use='max', percentile=75.0, force_return=False):
+    """
+    Parameters
+    ----------
+    img: TiffFile/ ndarray
+        Either TiffFile or ndarray to display.
+        Standard AICS image: [t, z, channel, y, x]
+    use_indices: list
+        List containing the indices of which channels to use for display.
+        Default: [1, 3, 5]
+    use: string
+        String determing which numpy function to use for displaying image.
+        Default: 'max'
+    percentile: float
+        Float to be used if numpy function is specified to be 'percentile'.
+    force_return: boolean
+        Boolean determining if the generated image data should be returned.
+    Output
+    ----------
+    If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the numpy function of the z-stack on top of each other.
+    """
+
+    img = check_node_for_image(self, img)
+
+    # if the image object is not in ndarray form now, it was not a valid arg
+    if not isinstance(img, np.ndarray):
+        print('display_stack(img) requires img to be either type TiffFile or ndarray.')
+        raise TypeError
+
+    size = img.shape
+    dims = len(size)
+    if dims == 5:
+        img = img[0,:,:,:,:]
+    if dims not in [4, 5]:
+        print('image data is not in a standard aics image format.')
+        raise TypeError
+
+    if img.shape[1] != 7:
+        use_indices = [0, 1, 2]
+
+    # initialize empty numpy stack
+    real_values = np.zeros((size[2], size[3]))
+    # append the normalized the numpy stack for each channel added
+    for projection, i in enumerate(use_indices):
+        # get the channel data using the specified numpy function
+        if use == 'max':
+            max_stack = _normalize_im(np.max(img[:, i, :, :], 0))
+            real_values += max_stack
+
+        if use == 'mean':
+            max_stack = _normalize_im(np.mean(img[:, i, :, :], 0))
+            real_values += max_stack
+
+        if use == 'percentile':
+            max_stack = _normalize_im(np.percentile(
+                            img[:, i, :, :], percentile, 0))
+            real_values += max_stack
+
+    if force_return:
+        return _normalize_im(real_values)
+
+    if use == 'all':
+        styles = ['max', 'mean', 'percentile']
+        fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
+        axes = axes.flatten()
+
+        img_collection = list()
+        for i, style in enumerate(styles):
+            img_collection.append(self.display_stack(img,
+                                    use_indices=use_indices,
+                                    use=styles[i],
+                                    percentile=percentile,
+                                    force_return=True))
+
+        # for each varient plot rgb
+        for i, ax in enumerate(axes):
+            # normalize the whole image
+            ax.set(xticks=[], yticks=[])
+            ax.set_title(styles[i] + ' project' +
+                        '\nchannels: ' + str(use_indices))
+            ax.imshow(img_collection[i])
+
+    else:
+        # normalize the whole image
+        real_values = _normalize_im(real_values)
+        # plot
+        plt.axis('off')
+        plt.title('channels: ' + str(use_indices))
+        plt.imshow(real_values)
+
+def display_segs(self, use='max', percentile=75.0, force_return=False):
+    if not isinstance(self, quilt.nodes.GroupNode):
+        raise TypeError('"display_segs" requires a node with at least one of each associated "cell_segs", "nuclei_segs", and "structure_segs" as the "node" parameter')
+
+    associates = self.get_associates()
+    seg_keys = ['cell_segs', 'nuclei_segs', 'structure_segs']
+    if not all(key in associates for key in seg_keys):
+        raise TypeError('"display_segs" requires a node with at least one of each associated "cell_segs", "nuclei_segs", and "structure_segs" as the "node" parameter')
+
+    imgs = list()
+    imgs.append(associates['cell_segs'][0]['image'])
+    imgs.append(associates['nuclei_segs'][0]['image'])
+    imgs.append(associates['structure_segs'][0]['image'])
+
+    # specified np function doesn't exist or is not supported
+    if use not in ['max', 'mean', 'percentile', 'all']:
+        print('display_icell parameter "use" must be "max" (default), "mean", "percentile", or "all".')
+        raise ValueError
+
+    # create empty np.ndarray
+    real_values = np.zeros((624, 924))
+
+    # prep all segs
+    for i, img in enumerate(imgs):
+        # check if TiffFile and convert if necessary
+        if isinstance(img, tfle.tifffile.TiffFile):
+            img = img.asarray()
+            imgs[i] = img
+
+        # if the image object is not in ndarray form now, it was not a valid arg
+        if not isinstance(img, np.ndarray):
+            print('display_icell(img) requires all images in imgs to be either type TiffFile or ndarray.')
+            raise TypeError
+
+        # np function all imgs to a 2d
+        if use == 'max':
+            imgs[i] = _normalize_im(np.max(img, 0))
+            real_values += imgs[i]
+        if use == 'mean':
+            imgs[i] = _normalize_im(np.mean(img, 0))
+            real_values += imgs[i]
+        if use == 'percentile':
+            imgs[i] = _normalize_im(np.percentile(img, percentile, 0).astype(np.uint8))
+            real_values += imgs[i]
+
+    if force_return:
+        return _normalize_im(real_values)
+
+    if use == 'all':
+        styles = ['max', 'mean', 'percentile']
+        fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
+        axes = axes.flatten()
+
+        img_collection = list()
+        for i, style in enumerate(styles):
+            img_collection.append(QuiltLoader.display_segs(imgs,
+                                    use=styles[i],
+                                    percentile=percentile,
+                                    force_return=True))
+
+        # for each varient plot rgb
+        for i, ax in enumerate(axes):
+            # normalize the whole image
+            ax.set(xticks=[], yticks=[])
+            ax.set_title(styles[i] + ' project')
+            ax.imshow(img_collection[i])
+
+    else:
+        # normalize the whole image
+        real_values = _normalize_im(real_values)
+        # plot
+        plt.axis('off')
+        plt.imshow(real_values)
+
+def display_all(node, use='max', percentile=75.0):
+    return
 
 STANDARD_LOADERS = {'image': tfle.TiffFile,
                     'info': json.load,
                     'load': _custom_try_except}
 
 STANDARD_ATTRIBUTES = {'get_associates': _get_associates,
-                       'items': _get_items}
+                       'items': _get_items,
+                       'as_dataframe': _get_dataframe,
+                       'display_channels': display_channels,
+                       'display_stack': display_stack,
+                       'display_rgb': display_rgb,
+                       'display_segs': display_segs}
 
 class QuiltLoader:
     """
@@ -273,7 +630,7 @@ class QuiltLoader:
         for remove_key in keys:
             if '_' == remove_key[0]:
                 keys.remove(remove_key)
-                
+
         keys.remove('_node')
 
         return len(keys)
@@ -297,8 +654,6 @@ class QuiltLoader:
         If key is not a string, int, or slice, raises TypeError as unsupported.
         """
         # TODO:
-        # attempt to fix the key + 1, start, stop = 1 issues
-        #
         # add dev_mode that returns two objects
         # current
         # fov = fov['image']
@@ -313,7 +668,7 @@ class QuiltLoader:
             for remove_key in keys:
                 if '_' == remove_key[0]:
                     keys.remove(remove_key)
-            
+
             keys.remove('_node')
 
             # return the specified iterable
@@ -352,336 +707,3 @@ class QuiltLoader:
         # return unsupported type
         print('unsupported iter-type:', type(key))
         raise TypeError
-
-    def display_channels(img, use_channels=[1, 3, 5, 6]):
-        """
-        Parameters
-        ----------
-        img: TiffFile/ ndarray
-            Either TiffFile or ndarray to display.
-            Standard AICS image: [t, z, channel, y, x]
-        use_channels: list
-            List containing the indices of which channels to use for display.
-            Default: [1, 3, 5, 6]
-        Output
-        ----------
-        If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the max of the z-stack.
-        """
-
-        converted = False
-
-        # check if TiffFile and convert if necessary
-        if isinstance(img, tfle.tifffile.TiffFile):
-            img = img.asarray()
-            converted = True
-
-        # if the image object is not in ndarray form now, it was not a valid arg
-        if not isinstance(img, np.ndarray):
-            print('display_channels(img) requires img to be either type TiffFile or ndarray.')
-            raise TypeError
-
-        # initialize plots
-        fig, axes = plt.subplots(1, len(use_channels), figsize=(15, 10))
-        axes = axes.flatten()
-
-        dims = len(img.shape)
-        if dims == 5:
-            img = np.max(img, 0)
-        if dims not in [4, 5]:
-            print('image data is not in a standard aics image format.')
-            raise TypeError
-
-        if img.shape[1] != 7:
-            use_channels = [0, 1, 2, 3]
-
-        # for each channel plot max of stack
-        for i, ax in enumerate(axes):
-            z_stack = img[:,use_channels[i],:,:]
-            max_project = np.max(z_stack, 0)
-            ax.imshow(max_project)
-            ax.set(xticks=[], yticks=[])
-            ax.set_title('channel: ' + str(use_channels[i]))
-
-        # viewing nicety
-        plt.tight_layout()
-
-        # return the ndarray of the img if it was converted
-        if converted:
-            return img
-
-    def display_rgb(img, rgb_indices=[1, 3, 5], use='max', percentile=75.0):
-        """
-        Parameters
-        ----------
-        img: TiffFile/ ndarray
-            Either TiffFile or ndarray to display.
-            Standard AICS image: [t, z, channel, y, x]
-        channel_to_rgb_indices: list
-            List containing the indices of which channels to use for display.
-            Default: [1, 3, 5]
-        use: string
-            String determing which numpy function to use for displaying image.
-            Default: 'max'
-        percentile: float
-            Float to be used if numpy function is specified to be 'percentile'.
-        Output
-        ----------
-        If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the numpy function of the z-stack as rgb channels.
-        """
-
-        # specified np function doesn't exist or is not supported
-        if use not in ['max', 'mean', 'percentile', 'all']:
-            print('display_rgb parameter "use" must be "max" (default), "mean", "percentile", or "all".')
-            raise ValueError
-
-        converted = False
-
-        # check if TiffFile and convert if necessary
-        if isinstance(img, tfle.tifffile.TiffFile):
-            img = img.asarray()
-            converted = True
-
-        # if the image object is not in ndarray form now, it was not a valid arg
-        if not isinstance(img, np.ndarray):
-            print('display_rgb(img) requires img to be either type TiffFile or ndarray.')
-            raise TypeError
-
-        # initialize use all variables
-        if use == 'all':
-            styles = ['max', 'mean', 'percentile']
-            fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
-            axes = axes.flatten()
-
-            img_collection = list()
-
-        dims = len(img.shape)
-        if dims == 5:
-            img = img[0,:,:,:,:]
-        if dims not in [4, 5]:
-            print('image data is not in a standard aics image format.')
-            raise TypeError
-
-        if img.shape[1] != 7:
-            rgb_indices = [0, 1, 2]
-
-        # get the rgb channel data using the specified numpy function
-        if use == 'max' or use == 'all':
-            r = np.max(img[:, rgb_indices[0], :, :], 0)
-            g = np.max(img[:, rgb_indices[1], :, :], 0)
-            b = np.max(img[:, rgb_indices[2], :, :], 0)
-
-            if use == 'all':
-                img_collection.append([r, g, b])
-        if use == 'mean' or use == 'all':
-            r = np.mean(img[:, rgb_indices[0], :, :], 0)
-            g = np.mean(img[:, rgb_indices[1], :, :], 0)
-            b = np.mean(img[:, rgb_indices[2], :, :], 0)
-
-            if use == 'all':
-                img_collection.append([r, g, b])
-        if use =='percentile' or use == 'all':
-            r = np.percentile(img[:, rgb_indices[0], :, :], percentile, 0)
-            g = np.percentile(img[:, rgb_indices[1], :, :], percentile, 0)
-            b = np.percentile(img[:, rgb_indices[2], :, :], percentile, 0)
-
-            if use == 'all':
-                img_collection.append([r, g, b])
-
-        if use == 'all':
-            # for each varient plot rgb
-            for i, ax in enumerate(axes):
-                ax.set(xticks=[], yticks=[])
-                ax.set_title(styles[i] + ' project' +
-                            '\nr: ' + str(rgb_indices[0]) +
-                            ' g: ' + str(rgb_indices[1]) +
-                            ' b: ' + str(rgb_indices[2]))
-                ax.imshow(_channels_to_rgb(img_collection[i][0],
-                                            img_collection[i][1],
-                                            img_collection[i][2]))
-
-        else:
-            # plot the image
-            plt.axis('off')
-            plt.title('r: ' + str(rgb_indices[0]) +
-                        ' g: ' + str(rgb_indices[1]) +
-                        ' b: ' + str(rgb_indices[2]))
-            plt.imshow(_channels_to_rgb(r, g, b))
-
-        # return the ndarray of the img if it was converted
-        if converted:
-            return img
-
-    def display_stack(img, use_indices=[1, 3, 5], use='max', percentile=75.0, force_return=False):
-        """
-        Parameters
-        ----------
-        img: TiffFile/ ndarray
-            Either TiffFile or ndarray to display.
-            Standard AICS image: [t, z, channel, y, x]
-        use_indices: list
-            List containing the indices of which channels to use for display.
-            Default: [1, 3, 5]
-        use: string
-            String determing which numpy function to use for displaying image.
-            Default: 'max'
-        percentile: float
-            Float to be used if numpy function is specified to be 'percentile'.
-        force_return: boolean
-            Boolean determining if the generated image data should be returned.
-        Output
-        ----------
-        If given TiffFile object, will first retrieve the image data by using TiffFile.asarray(). Uses matplotlib to display the specified channels at the numpy function of the z-stack on top of each other.
-        """
-
-        # specified np function doesn't exist or is not supported
-        if use not in ['max', 'mean', 'percentile', 'all']:
-            print('display_stack parameter "use" must be "max" (default), "mean", "percentile", or "all".')
-            raise ValueError
-
-        converted = False
-
-        # check if TiffFile and convert if necessary
-        if isinstance(img, tfle.tifffile.TiffFile):
-            img = img.asarray()
-            converted = True
-
-        # if the image object is not in ndarray form now, it was not a valid arg
-        if not isinstance(img, np.ndarray):
-            print('display_stack(img) requires img to be either type TiffFile or ndarray.')
-            raise TypeError
-
-        size = img.shape
-        dims = len(size)
-        if dims == 5:
-            img = img[0,:,:,:,:]
-        if dims not in [4, 5]:
-            print('image data is not in a standard aics image format.')
-            raise TypeError
-
-        if img.shape[1] != 7:
-            use_indices = [0, 1, 2]
-
-        # initialize empty numpy stack
-        real_values = np.zeros((size[2], size[3]))
-        # append the normalized the numpy stack for each channel added
-        for projection, i in enumerate(use_indices):
-            # get the channel data using the specified numpy function
-            if use == 'max':
-                max_stack = _normalize_im(np.max(img[:, i, :, :], 0))
-                real_values += max_stack
-
-            if use == 'mean':
-                max_stack = _normalize_im(np.mean(img[:, i, :, :], 0))
-                real_values += max_stack
-
-            if use == 'percentile':
-                max_stack = _normalize_im(np.percentile(
-                                img[:, i, :, :], percentile, 0))
-                real_values += max_stack
-
-        if force_return:
-            return _normalize_im(real_values)
-
-        if use == 'all':
-            styles = ['max', 'mean', 'percentile']
-            fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
-            axes = axes.flatten()
-
-            img_collection = list()
-            for i, style in enumerate(styles):
-                img_collection.append(QuiltLoader.display_stack(img,
-                                        use_indices=use_indices,
-                                        use=styles[i],
-                                        percentile=percentile,
-                                        force_return=True))
-
-            # for each varient plot rgb
-            for i, ax in enumerate(axes):
-                # normalize the whole image
-                ax.set(xticks=[], yticks=[])
-                ax.set_title(styles[i] + ' project' +
-                            '\nchannels: ' + str(use_indices))
-                ax.imshow(img_collection[i])
-
-        else:
-            # normalize the whole image
-            real_values = _normalize_im(real_values)
-            # plot
-            plt.axis('off')
-            plt.title('channels: ' + str(use_indices))
-            plt.imshow(real_values)
-
-        # return the ndarray of the img if it was converted
-        if converted:
-            return img
-
-    def display_icell(imgs=[], use='max', percentile=75.0, force_return=False):
-        # specified np function doesn't exist or is not supported
-        if use not in ['max', 'mean', 'percentile', 'all']:
-            print('display_icell parameter "use" must be "max" (default), "mean", "percentile", or "all".')
-            raise ValueError
-
-        converted = False
-
-        # create empty np.ndarray
-        real_values = np.zeros((624, 924))
-
-        # prep all segs
-        for i, img in enumerate(imgs):
-            # check if TiffFile and convert if necessary
-            if isinstance(img, tfle.tifffile.TiffFile):
-                img = img.asarray()
-                imgs[i] = img
-                converted = True
-
-            # if the image object is not in ndarray form now, it was not a valid arg
-            if not isinstance(img, np.ndarray):
-                print('display_icell(img) requires all images in imgs to be either type TiffFile or ndarray.')
-                raise TypeError
-
-            # np function all imgs to a 2d
-            if use == 'max':
-                imgs[i] = _normalize_im(np.max(img, 0))
-                real_values += imgs[i]
-            if use == 'mean':
-                imgs[i] = _normalize_im(np.mean(img, 0))
-                real_values += imgs[i]
-            if use == 'percentile':
-                imgs[i] = _normalize_im(np.percentile(img, percentile, 0).astype(np.uint8))
-                real_values += imgs[i]
-
-        if force_return:
-            return _normalize_im(real_values)
-
-        if use == 'all':
-            styles = ['max', 'mean', 'percentile']
-            fig, axes = plt.subplots(1, len(styles), figsize=(15, 10))
-            axes = axes.flatten()
-
-            img_collection = list()
-            for i, style in enumerate(styles):
-                img_collection.append(QuiltLoader.display_icell(imgs,
-                                        use=styles[i],
-                                        percentile=percentile,
-                                        force_return=True))
-
-            # for each varient plot rgb
-            for i, ax in enumerate(axes):
-                # normalize the whole image
-                ax.set(xticks=[], yticks=[])
-                ax.set_title(styles[i] + ' project')
-                ax.imshow(img_collection[i])
-
-        else:
-            # normalize the whole image
-            real_values = _normalize_im(real_values)
-            # plot
-            plt.axis('off')
-            plt.imshow(real_values)
-
-        # return the ndarray of the img if it was converted
-        if converted:
-            return img
-
-    def display_all(node, use='max', percentile=75.0):
-        return
