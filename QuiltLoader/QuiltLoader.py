@@ -7,7 +7,10 @@ import quilt
 import types
 import json
 
-import matplotlib.pyplot as plt
+try:
+    import matplotlib.pyplot as plt
+except RuntimeError:
+    pass
 from IPython import get_ipython
 try:
     get_ipython().run_line_magic('matplotlib', 'inline')
@@ -129,12 +132,11 @@ def _get_associates(self):
 def _get_items(self):
     # get all node keys
     keys = list(self.__dict__.keys())
+    iter_k = list(keys)
     # remove any keys that begin with '_'
-    for remove_key in keys:
-        if '_' == remove_key[0]:
+    for remove_key in iter_k:
+        if remove_key.startswith('_'):
             keys.remove(remove_key)
-
-    keys.remove('_node')
 
     items = dict()
     for key in keys:
@@ -497,13 +499,13 @@ STANDARD_LOADERS = {'image': tfle.TiffFile,
                     'info': json.load,
                     'load': _custom_try_except}
 
-STANDARD_ATTRIBUTES = {'get_associates': _get_associates,
-                       'items': _get_items,
-                       'as_dataframe': _get_dataframe,
-                       'display_channels': display_channels,
-                       'display_stack': display_stack,
-                       'display_rgb': display_rgb,
-                       'display_segs': display_segs}
+STANDARD_ATTRIBUTES = {'_get_associates': _get_associates,
+                       '_items': _get_items,
+                       '_as_dataframe': _get_dataframe,
+                       '_display_channels': display_channels,
+                       '_display_stack': display_stack,
+                       '_display_rgb': display_rgb,
+                       '_display_segs': display_segs}
 
 class QuiltLoader:
     """
@@ -533,24 +535,41 @@ class QuiltLoader:
                 attributes=STANDARD_ATTRIBUTES):
 
         # set all nodes to have a pointer to the head
-        pkg = self.ensure_package(self, package)
-        setattr(quilt.nodes.Node, 'pkg_head', pkg)
+        self.pkg = self.ensure_package(self, package)
+        self.load_functions = self.add_load_functions(load_functions)
+        self.attributes = self.add_attributes(attributes)
 
-        # set all nodes to have new functions
-        quilt.nodes.Node.__len__ = self.get_len
-        quilt.nodes.Node.__getitem__ = self.get_node
+        self.pkg.__len__ = self.get_len
+        self.pkg.__getitem__ = self.get_node
 
-        # add provided load functions as an attribute
-        load_functions = self.add_load_functions(load_functions)
-        setattr(quilt.nodes.Node, 'load_functions', load_functions)
-
-        # add all additional attributes
-        attributes = self.add_attributes(attributes)
-        for label, attr in attributes.items():
-            setattr(quilt.nodes.Node, label, attr)
-
+        self.children = self.collect_all_children(self, self.pkg, list())
         # return the loaded object
-        return pkg
+        return self.pkg
+
+    def collect_all_children(self, parent, current_list):
+        # get all node keys
+        keys = list(parent.__dict__.keys())
+        iter_k = list(keys)
+        # remove any keys that begin with '_'
+        for remove_key in iter_k:
+            if remove_key.startswith('_'):
+                keys.remove(remove_key)
+
+        add = [parent]
+        if len(keys) > 0:
+            children = [getattr(parent, key) for key in keys]
+            for child in children:
+                add += self.collect_all_children(self, child, current_list)
+
+                setattr(child, 'parent', parent)
+                setattr(child, 'pkg_head', self.pkg)
+                child.__len__ = self.get_len
+                child.__getitem__ = self.get_node
+                setattr(child, '_load_functions', self.load_functions)
+                for label, attr in self.attributes.items():
+                    setattr(child, label, attr)
+
+        return current_list + add
 
     def add_load_functions(loaders):
         """
@@ -626,12 +645,11 @@ class QuiltLoader:
 
         # get all node keys
         keys = list(self.__dict__.keys())
+        iter_k = list(keys)
         # remove any keys that begin with '_'
-        for remove_key in keys:
-            if '_' == remove_key[0]:
+        for remove_key in iter_k:
+            if remove_key.startswith('_'):
                 keys.remove(remove_key)
-
-        keys.remove('_node')
 
         return len(keys)
 
@@ -664,18 +682,17 @@ class QuiltLoader:
         if isinstance(key, int):
             # get all node keys
             keys = list(self.__dict__.keys())
+            iter_k = list(keys)
             # remove any keys that begin with '_'
-            for remove_key in keys:
-                if '_' == remove_key[0]:
+            for remove_key in iter_k:
+                if remove_key.startswith('_'):
                     keys.remove(remove_key)
-
-            keys.remove('_node')
 
             # return the specified iterable
             # key + 1 due to nodes having a self key
             attempt = getattr(self, keys[key])
             try:
-                return self.load_functions['load'](attempt, 'load')
+                return self._load_functions['load'](attempt, 'load')
             except AttributeError:
                 return getattr(self, keys[key])
 
@@ -694,10 +711,10 @@ class QuiltLoader:
         if isinstance(key, str):
             # detect node type and load proper
             if key == 'image':
-                return self.load_functions['image'](getattr(
+                return self._load_functions['image'](getattr(
                                         getattr(self, key), 'load')())
             if key == 'info':
-                return self.load_functions['info'](open(
+                return self._load_functions['info'](open(
                                         getattr(getattr(self, key), 'load')()))
             # try:
             #     return self.load_functions['load'](self, 'load')
