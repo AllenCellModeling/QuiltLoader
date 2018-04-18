@@ -129,12 +129,11 @@ def _get_associates(self):
 def _get_items(self):
     # get all node keys
     keys = list(self.__dict__.keys())
+    iter_k = list(keys)
     # remove any keys that begin with '_'
-    for remove_key in keys:
-        if '_' == remove_key[0]:
+    for remove_key in iter_k:
+        if remove_key.startswith('_'):
             keys.remove(remove_key)
-
-    keys.remove('_node')
 
     items = dict()
     for key in keys:
@@ -626,12 +625,11 @@ class QuiltLoader:
 
         # get all node keys
         keys = list(self.__dict__.keys())
+        iter_k = list(keys)
         # remove any keys that begin with '_'
-        for remove_key in keys:
-            if '_' == remove_key[0]:
+        for remove_key in iter_k:
+            if remove_key.startswith('_'):
                 keys.remove(remove_key)
-
-        keys.remove('_node')
 
         return len(keys)
 
@@ -664,12 +662,11 @@ class QuiltLoader:
         if isinstance(key, int):
             # get all node keys
             keys = list(self.__dict__.keys())
+            iter_k = list(keys)
             # remove any keys that begin with '_'
-            for remove_key in keys:
-                if '_' == remove_key[0]:
+            for remove_key in iter_k:
+                if remove_key.startswith('_'):
                     keys.remove(remove_key)
-
-            keys.remove('_node')
 
             # return the specified iterable
             # key + 1 due to nodes having a self key
