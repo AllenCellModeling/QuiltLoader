@@ -6,4 +6,6 @@ __pycache__/
 .config/
 .jupyter/
 
+.egg-info/
+
 .~loaders.ipynb
