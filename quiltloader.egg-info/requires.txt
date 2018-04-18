@@ -1,4 +1,0 @@
-quilt
-matplotlib
-numpy
-tifffile
