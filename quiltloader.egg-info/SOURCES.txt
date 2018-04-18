@@ -1,0 +1,8 @@
+README.md
+quiltloader/__init__.py
+quiltloader/quiltloader.py
+quiltloader.egg-info/PKG-INFO
+quiltloader.egg-info/SOURCES.txt
+quiltloader.egg-info/dependency_links.txt
+quiltloader.egg-info/requires.txt
+quiltloader.egg-info/top_level.txt

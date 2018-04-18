@@ -1,0 +1,11 @@
+Metadata-Version: 1.0
+Name: quiltloader
+Version: 0.0.0
+Summary:  adds bio-science loaders to quilt nodes as well as niceties for interacting and navigating quilt nodes
+Home-page: https://github.com/AllenCellModeling/QuiltLoader
+Author: Jackson Maxfield Brown
+Author-email: jacksonb@alleninstitute.org
+License: UNKNOWN
+Description-Content-Type: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
